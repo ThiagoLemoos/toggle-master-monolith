@@ -1,22 +1,46 @@
 import os
 import click
+import boto3
+from botocore.exceptions import ClientError
 from flask import Flask, request, jsonify
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import json
 
 app = Flask(__name__)
 
-DB_HOST = os.getenv("DB_HOST")
-DB_NAME = os.getenv("DB_NAME")
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 def get_db_connection():
+
+    secret_name = 'rds!db-8b09b23e-cbaa-414c-833f-bc448655004d'
+    region_name = "us-east-1"
+
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+
+    try:
+        get_secret_value_response = client.get_secret_value(
+            SecretId=secret_name
+        )
+    except ClientError as e:
+        raise e
+
+    secret = json.loads(get_secret_value_response['SecretString'])
+
+    DB_USER = secret['username']
+    DB_PASS = secret['password']
+    DB_HOST = "tech-challenge-rds.c7eeg88yub17.us-east-1.rds.amazonaws.com"
+    DB_NAME = "togglemaster"
+
     conn = psycopg2.connect(
         host=DB_HOST,
         database=DB_NAME,
         user=DB_USER,
-        password=DB_PASSWORD
+        password=DB_PASS
     )
     return conn
 
@@ -55,10 +79,10 @@ def create_flag():
     data = request.get_json()
     if not data or 'name' not in data:
         return jsonify({"error": "O campo 'name' é obrigatório"}), 400
-    
+
     name = data['name']
     is_enabled = data.get('is_enabled', False)
-    
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -73,7 +97,7 @@ def create_flag():
             cur.close()
         if 'conn' in locals() and not conn.closed:
             conn.close()
-            
+
     return jsonify({"message": f"Flag '{name}' criada com sucesso"}), 201
 
 @app.route('/flags', methods=['GET'])
@@ -107,7 +131,7 @@ def get_flag_status(name):
             cur.close()
         if 'conn' in locals() and not conn.closed:
             conn.close()
-    
+
     if flag:
         return jsonify(flag), 200
     return jsonify({"error": "Flag não encontrada"}), 404
@@ -117,17 +141,17 @@ def update_flag(name):
     data = request.get_json()
     if data is None or 'is_enabled' not in data or not isinstance(data['is_enabled'], bool):
         return jsonify({"error": "O campo 'is_enabled' (booleano) é obrigatório"}), 400
-        
+
     is_enabled = data['is_enabled']
-    
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("UPDATE flags SET is_enabled = %s WHERE name = %s", (is_enabled, name))
-        
+
         if cur.rowcount == 0:
             return jsonify({"error": "Flag não encontrada"}), 404
-            
+
         conn.commit()
     except Exception as e:
         return jsonify({"error": "Erro interno no servidor ao atualizar a flag", "details": str(e)}), 500
@@ -136,7 +160,7 @@ def update_flag(name):
             cur.close()
         if 'conn' in locals() and not conn.closed:
             conn.close()
-    
+
     return jsonify({"message": f"Flag '{name}' atualizada"}), 200
 
 if __name__ == '__main__':
